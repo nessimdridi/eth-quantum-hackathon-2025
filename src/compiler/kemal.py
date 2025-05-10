@@ -59,8 +59,8 @@ def extract_gate_sequence(qnode):
     
     seq = []
     for op in tape.operations:
-        if op.name in ("RX", "RY"):
-            name = op.name
+        if op.name in ("RX", "RY", "IsingXX"):
+            name = "MS" if op.name == "IsingXX" else op.name
 
             # assume single-parameter gates
             angle = float(op.parameters[0])
@@ -73,7 +73,7 @@ def extract_gate_sequence(qnode):
     return seq
 
 # ---------------------------------------------------------------------
-#                                 CHECK
+#                              CHECKS
 # ---------------------------------------------------------------------
 
 def correct_position() -> bool:
@@ -117,18 +117,48 @@ def map_ion_movement(initial_ion_pos, trap_graph): # do we need trap_graph?
     current_ion_pos = initial_ion_pos
 
     gate_seq = extract_gate_sequence(circuit)
-    print(gate_seq)
     
     # construction of the gate sequence and position history
-    t = 0
+    used_qubits = set()
     for gate in gate_seq:
-         # only if not idle for 1 qu gates and for 2 qu gates if they are in the interaction zone
-        if gates_schedule_t == [] and correct_position(): 
+        is_two_qubit = isinstance(gate[2], tuple)
+
+        if not is_two_qubit: 
+            if gate[2] in used_qubits:
+                gates_schedule.append(gates_schedule_t)
+                gates_schedule_t = []
+                used_qubits = set()
+
             gates_schedule_t.append(gate)
-        if no_conflict(gate, gates_schedule_t, positions_history): 
-            gates_schedule_t.append(gate)
-        else: # if we need to wait for some wires or need to move, then we stop adding anything
-            continue
+            used_qubits.add(gate[2])
+        else:
+            # close any pending 1 qubit group if a 2 qubit gate appears
+            if gates_schedule_t:
+                gates_schedule.append(gates_schedule_t)
+                gates_schedule_t = []
+                used_qubits = set()
+                
+            # now, append the 2 qubit gate itself
+            gates_schedule.append([gate])
+            # and start the next time step
+            gates_schedule_t = []
+
+    # if any leftover 1 qubit gates are left the end, append them too or control in general
+    if gates_schedule_t:
+        if gates_schedule:
+            last = gates_schedule[-1]
+            # check that last is also a 1 qubit group
+            if all(not isinstance(g[2], tuple) for g in last):
+                last_wires = {g[2] for g in last}
+                new_wires  = {g[2] for g in gates_schedule_t}
+                # if disjoint, merge; else append separately
+                if last_wires.isdisjoint(new_wires):
+                    gates_schedule[-1] = last + gates_schedule_t
+                    return gates_schedule
+        # otherwise, or if merge failed, append as its own step
+        gates_schedule.append(gates_schedule_t)
+    
+    print(gates_schedule)
     return None
 
 # ---------------------------------------------------------------------
@@ -141,13 +171,14 @@ def debug():
 
     @qml.qnode(device=test_device)
     def test_qft_circuit():
-        qml.QFT(wires=range(8))
-        return qml.density_matrix(wires=range(8))
+        qml.QFT(wires=range(num_ions))
+        return qml.density_matrix(wires=range(num_ions))
 
     fid = qml.math.fidelity(circuit(), test_qft_circuit())
+    print("FIDELITY:", fid)
     qml.drawer.use_style("black_white")
     fig, ax = qml.draw_mpl(circuit)()
-    #plt.show()
+    plt.show()
 
 
 # ---------------------------------------------------------------------
@@ -156,8 +187,8 @@ def debug():
 
 def main():
     # call and interface everything
-    # debug()
     initial_ion_pos = [(0, 0), (0, 1), (1, 0), (1, 2), (2, 0), (2, 1), (3, 0), (3, 1)]  # Initial positions at t=0
+    #debug()
     map_ion_movement(initial_ion_pos, trap_graph)
 
     return None
