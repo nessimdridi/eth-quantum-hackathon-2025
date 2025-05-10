@@ -1,12 +1,18 @@
+import sys
+import os
+
+# Add project root to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
 import pennylane as qml
 import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
-from .. import trap
-from .. import fidelity
-from .. import verifier
+from src import trap
+from src import fidelity
+from src import verifier
 from functools import lru_cache
-from . import max_new
+from src.modules import visualization 
 
 trap_graph = trap.create_trap_graph()
 
@@ -328,7 +334,7 @@ def main():
     verifier.verifier(positions_history, gates_schedule, trap_graph)
     fidelity.fidelity(positions_history, gates_schedule, trap_graph)
 
-    max_new.visualize_movement_on_trap(trap_graph, positions_history, gates_schedule)
+    visualization.visualize_movement_on_trap(trap_graph, positions_history, gates_schedule)
 
     return None
 
