@@ -72,49 +72,22 @@ def extract_gate_sequence(qnode):
             seq.append((name, angle, wire))
     return seq
 
-# ---------------------------------------------------------------------
-#                              CHECKS
-# ---------------------------------------------------------------------
-
-def correct_position() -> bool:
-
-    # checks for 1 qubit gates if the position is idle or not
-
-    # checks for 2 qubit gates if both ions are ready in the interaction zone
-
-    return True
-
-def no_conflict(gate, gate_schedule_t, position_history) -> bool:
-
-    if not correct_position():
-        return False
-    
-    # and finally, if we have conflicting wires/qubits
-    
-    return True
 
 # ---------------------------------------------------------------------
-#                                 MAPPING
+#                                 BATCHING
 # ---------------------------------------------------------------------
 
-#TODO: implement moving ions for 2 qubit gates
-def map_ion_movement(initial_ion_pos, trap_graph): # do we need trap_graph?
+
+def batch_circuit():
     """
-    Maps the sequences of the QFT to ion coordinates and sequence of gates
-
-    Args:
-        initial_ion_pos (list of tuples): initial positions of the ion at t=0
+    Maps the sequences of the QFT to batched, preselected gates
 
     Returns:
-        
+        batched_circuit 
     """
     
-    positions_history   = []
-    gates_schedule      = []
-    gates_schedule_t    = []
-
-    positions_history.append(initial_ion_pos) # t = 0
-    current_ion_pos = initial_ion_pos
+    batched_circuit      = []
+    batched_circuit_t    = []
 
     gate_seq = extract_gate_sequence(circuit)
     
@@ -125,41 +98,64 @@ def map_ion_movement(initial_ion_pos, trap_graph): # do we need trap_graph?
 
         if not is_two_qubit: 
             if gate[2] in used_qubits:
-                gates_schedule.append(gates_schedule_t)
-                gates_schedule_t = []
+                batched_circuit.append(batched_circuit_t)
+                batched_circuit_t = []
                 used_qubits = set()
 
-            gates_schedule_t.append(gate)
+            batched_circuit_t.append(gate)
             used_qubits.add(gate[2])
         else:
             # close any pending 1 qubit group if a 2 qubit gate appears
-            if gates_schedule_t:
-                gates_schedule.append(gates_schedule_t)
-                gates_schedule_t = []
+            if batched_circuit_t:
+                batched_circuit.append(batched_circuit_t)
+                batched_circuit_t = []
                 used_qubits = set()
                 
             # now, append the 2 qubit gate itself
-            gates_schedule.append([gate])
+            batched_circuit.append([gate])
             # and start the next time step
-            gates_schedule_t = []
+            batched_circuit_t = []
 
     # if any leftover 1 qubit gates are left the end, append them too or control in general
-    if gates_schedule_t:
-        if gates_schedule:
-            last = gates_schedule[-1]
+    # do we need this?
+    if batched_circuit_t:
+        if batched_circuit:
+            last = batched_circuit[-1]
             # check that last is also a 1 qubit group
             if all(not isinstance(g[2], tuple) for g in last):
                 last_wires = {g[2] for g in last}
-                new_wires  = {g[2] for g in gates_schedule_t}
+                new_wires  = {g[2] for g in batched_circuit_t}
                 # if disjoint, merge; else append separately
                 if last_wires.isdisjoint(new_wires):
-                    gates_schedule[-1] = last + gates_schedule_t
-                    return gates_schedule
+                    batched_circuit[-1] = last + batched_circuit_t
+                    return batched_circuit
         # otherwise, or if merge failed, append as its own step
-        gates_schedule.append(gates_schedule_t)
+        batched_circuit.append(batched_circuit_t)
     
-    print(gates_schedule)
+    return batched_circuit
+
+# ---------------------------------------------------------------------
+#                                 MAPPING
+# ---------------------------------------------------------------------
+
+def is_single_qubit_op(circuit_column) -> bool:
+    operation = circuit_column[0]
+    if isinstance(operation[2], int):
+        return True
+    return False
+
+def is_two_qubit_op(circuit_column) -> bool:
+    operation = circuit_column[0]
+    if isinstance(operation[2], tuple):
+        return True
+    return False
+
+def get_two_qubit_path(circuit_column, current_ion_pos):
     return None
+
+def get_two_qubit_gate_schedule(two_qubit_path):
+    return None
+
 
 # ---------------------------------------------------------------------
 #                                 DEBUG
@@ -189,8 +185,29 @@ def main():
     # call and interface everything
     initial_ion_pos = [(0, 0), (0, 1), (1, 0), (1, 2), (2, 0), (2, 1), (3, 0), (3, 1)]  # Initial positions at t=0
     #debug()
-    map_ion_movement(initial_ion_pos, trap_graph)
+    batched_circuit = batch_circuit()
 
+    gates_schedule    = []
+    positions_history = []
+    current_ion_pos = initial_ion_pos
+
+    cnt_single_op = 0 
+    cnt_two_op    = 0
+    for circuit_column in batched_circuit:
+        if is_single_qubit_op(circuit_column):
+            cnt_single_op += 1
+            gates_schedule.append(circuit_column)
+            current_ion_pos = current_ion_pos # placeholder
+            positions_history.append(current_ion_pos)
+        elif is_two_qubit_op(circuit_column):
+            cnt_two_op += 1
+            two_qubit_path = get_two_qubit_path(circuit_column, current_ion_pos)
+            two_qubit_gate_schedule = get_two_qubit_gate_schedule(two_qubit_path)
+            gates_schedule = gates_schedule + two_qubit_gate_schedule
+            current_ion_pos = two_qubit_path[-1]
+            positions_history = positions_history + two_qubit_path
+
+        
     return None
 
 if __name__ == '__main__':
