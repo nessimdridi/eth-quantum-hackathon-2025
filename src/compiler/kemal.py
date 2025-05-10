@@ -1,5 +1,5 @@
 import pennylane as qml
-from pennylane.tape import QuantumTape
+import matplotlib.pyplot as plt
 import numpy as np
 from .. import trap
 from .. import fidelity
@@ -9,7 +9,6 @@ trap_graph = trap.create_trap_graph()
 num_ions = 8
 
 device = qml.device("default.mixed", wires=num_ions)
-test_device = qml.device("default.mixed", wires=num_ions)
 
 # ---------------------------------------------------------------------
 #                                 CIRCUIT
@@ -45,17 +44,10 @@ def circuit():
     for i in range(num_ions):
         make_Hadamard(wire=i)
         t = i+1
-        #for k,l in zip(range(2, num_ions-i+1), range(t, num_ions)):
         for k in range(2, num_ions-i+1):
-            print(i, k, t)
             controlled_phase_gate(k, control=t, target=i)
             t += 1
     return qml.density_matrix(wires=range(num_ions))
-
-@qml.qnode(device=test_device)
-def test_qft_circuit():
-    qml.QFT(wires=range(8))
-    return qml.density_matrix(wires=range(8))
 
 def extract_gate_sequence(qnode):
     """
@@ -140,16 +132,34 @@ def map_ion_movement(initial_ion_pos, trap_graph): # do we need trap_graph?
     return None
 
 # ---------------------------------------------------------------------
+#                                 DEBUG
+# ---------------------------------------------------------------------
+
+
+def debug():
+    test_device = qml.device("default.mixed", wires=num_ions)
+
+    @qml.qnode(device=test_device)
+    def test_qft_circuit():
+        qml.QFT(wires=range(8))
+        return qml.density_matrix(wires=range(8))
+
+    fid = qml.math.fidelity(circuit(), test_qft_circuit())
+    qml.drawer.use_style("black_white")
+    fig, ax = qml.draw_mpl(circuit)()
+    #plt.show()
+
+
+# ---------------------------------------------------------------------
 #                                 MAIN
 # ---------------------------------------------------------------------
 
 def main():
     # call and interface everything
+    # debug()
     initial_ion_pos = [(0, 0), (0, 1), (1, 0), (1, 2), (2, 0), (2, 1), (3, 0), (3, 1)]  # Initial positions at t=0
+    map_ion_movement(initial_ion_pos, trap_graph)
 
-    #map_ion_movement(initial_ion_pos, trap_graph)
-    fid = qml.math.fidelity(circuit(), test_qft_circuit())
-    print("fid:", fid)
     return None
 
 if __name__ == '__main__':
