@@ -5,8 +5,8 @@ import networkx as nx
 from .. import trap
 from .. import fidelity
 from .. import verifier
-import max_new
 from functools import lru_cache
+from . import max_new
 
 trap_graph = trap.create_trap_graph()
 
@@ -327,6 +327,8 @@ def main():
     # interface to verifier and fidelity
     verifier.verifier(positions_history, gates_schedule, trap_graph)
     fidelity.fidelity(positions_history, gates_schedule, trap_graph)
+
+    max_new.visualize_movement_on_trap(trap_graph, positions_history, gates_schedule)
 
     return None
 
