@@ -240,7 +240,9 @@ def get_two_qubit_path(current_ion_pos, interaction_points, qu1, qu2):
         step[qu2] = padded2[i]
         stepwise_positions.append(step)
 
-    stepwise_positions += [pos.copy() for pos in reversed(stepwise_positions[:-1])]
+    forward = [pos.copy() for pos in stepwise_positions]
+    
+    stepwise_positions.extend(pos.copy() for pos in reversed(forward))
 
     return stepwise_positions
 
