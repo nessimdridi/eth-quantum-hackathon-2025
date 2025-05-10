@@ -153,8 +153,29 @@ def is_two_qubit_op(circuit_column) -> bool:
 def get_two_qubit_path(circuit_column, current_ion_pos):
     return None
 
-def get_two_qubit_gate_schedule(two_qubit_path):
-    return None
+def get_two_qubit_gate_schedule(two_qubit_path, circuit_column):
+    two_qubit_gate_schedule = []
+    prev = None
+    run_length = 0
+    inserted = False
+
+    for entry in two_qubit_path:
+        if not inserted:
+            if entry == prev:
+                run_length += 1
+            else:
+                prev = entry
+                run_length = 1
+            
+            #TODO: rethink when introducing 3D
+            if run_length >= 2:
+                two_qubit_gate_schedule.append(circuit_column)
+                inserted = True
+                continue
+
+        two_qubit_gate_schedule.append([])
+
+    return two_qubit_gate_schedule
 
 
 # ---------------------------------------------------------------------
@@ -202,12 +223,11 @@ def main():
         elif is_two_qubit_op(circuit_column):
             cnt_two_op += 1
             two_qubit_path = get_two_qubit_path(circuit_column, current_ion_pos)
-            two_qubit_gate_schedule = get_two_qubit_gate_schedule(two_qubit_path)
+            two_qubit_gate_schedule = get_two_qubit_gate_schedule(two_qubit_path, circuit_column)
             gates_schedule = gates_schedule + two_qubit_gate_schedule
             current_ion_pos = two_qubit_path[-1]
             positions_history = positions_history + two_qubit_path
 
-        
     return None
 
 if __name__ == '__main__':
