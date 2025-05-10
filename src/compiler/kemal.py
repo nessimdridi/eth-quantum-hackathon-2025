@@ -1,8 +1,11 @@
 import pennylane as qml
 import matplotlib.pyplot as plt
 import numpy as np
+import networkx as nx
 from .. import trap
 from .. import fidelity
+from .. import verifier
+from functools import lru_cache
 
 trap_graph = trap.create_trap_graph()
 
@@ -138,6 +141,11 @@ def batch_circuit():
 #                                 MAPPING
 # ---------------------------------------------------------------------
 
+@lru_cache(maxsize=None)
+def shortest_path(src, dst):
+    """Return list of nodes along the shortest path from src to dst."""
+    return nx.shortest_path(trap_graph, src, dst)
+
 def is_single_qubit_op(circuit_column) -> bool:
     operation = circuit_column[0]
     if isinstance(operation[2], int):
@@ -150,32 +158,112 @@ def is_two_qubit_op(circuit_column) -> bool:
         return True
     return False
 
-def get_two_qubit_path(circuit_column, current_ion_pos):
-    return None
+def select_int_point(current_positions, interaction_positions, qu1, qu2):
+    """
+    Selects the interaction point index between two qubits qu1 and qu2.
+
+    Args:
+        current_positions (list of tuple): Positions of all qubits.
+        interaction_positions (list of tuple): Positions of all interaction points.
+        qu1 (int): Index of the first qubit.
+        qu2 (int): Index of the second qubit.
+
+    Returns:
+        int: Index of the interaction point in interaction_positions.
+    """
+    def adjusted(pos, idx):
+        x, y = pos
+        if 0 <= idx < 3:
+            return (x + 1, y)
+        elif 3 <= idx < 5:
+            return (x, y - 1)
+        elif 5 <= idx < 8:
+            return (x - 1, y)
+        raise ValueError(f"Qubit index {idx} out of supported range")
+
+    try:
+        qu1_pos = adjusted(current_positions[qu1], qu1)
+        qu2_pos = adjusted(current_positions[qu2], qu2)
+        int_pos = (qu1_pos[0], qu2_pos[1])
+        return interaction_positions.index(int_pos), int_pos
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"Failed to find interaction point: {e}")
+
+
+def get_qubits_paths(current_positions, interaction_positions, qu1, qu2):
+    """
+    Get the simultaneous movement paths from qubit 1 and qubit 2 to their interaction point.
+
+    Args:
+        current_positions (list of tuple): Positions of all qubits.
+        interaction_positions (list of tuple): Positions of all interaction points.
+        qu1 (int): Index of the first qubit.
+        qu2 (int): Index of the second qubit.
+        G (networkx.Graph): The trap graph.
+
+    Returns:
+        tuple: (path1, path2) where
+            path1 is the path from qu1 to the interaction point,
+            path2 is the path from qu2 to the interaction point.
+    """
+    int_idx, int_pos  = select_int_point(current_positions, interaction_positions, qu1, qu2)
+    path1 = shortest_path(current_positions[qu1], interaction_positions[int_idx])
+    path2 = shortest_path(current_positions[qu2], interaction_positions[int_idx])
+    return path1, path2
+
+def get_two_qubit_path(current_ion_pos, interaction_points, qu1, qu2):
+    """
+    Replace current_ion_pos with step-by-step updates for qubit 1 and qubit 2
+    as they move along their respective paths to the interaction point.
+
+    Args:
+        current_ion_pos (list of tuple): Initial positions of all qubits.
+        path1 (list of tuple): Path for qubit 1.
+        path2 (list of tuple): Path for qubit 2.
+        qu1 (int): Index of the first qubit.
+        qu2 (int): Index of the second qubit.
+
+    Returns:
+        list of list of tuple: A list where each item is a full current_ion_pos snapshot for that step.
+    """
+    path1, path2 = get_qubits_paths(current_ion_pos, interaction_points, qu1, qu2)
+    max_len = max(len(path1), len(path2))
+    
+    # Pad paths to same length (qubit stays at interaction point once arrived)
+    padded1 = path1 + [path1[-1]] * (max_len - len(path1))
+    padded2 = path2 + [path2[-1]] * (max_len - len(path2))
+
+    stepwise_positions = []
+    for i in range(max_len):
+        step = list(current_ion_pos)  # Copy the current state
+        step[qu1] = padded1[i]
+        step[qu2] = padded2[i]
+        stepwise_positions.append(step)
+
+    stepwise_positions += [pos.copy() for pos in reversed(stepwise_positions[:-1])]
+
+    return stepwise_positions
+
 
 def get_two_qubit_gate_schedule(two_qubit_path, circuit_column):
-    two_qubit_gate_schedule = []
-    prev = None
-    run_length = 0
+    """
+    Inserts circuit_column at the first index i where
+    two_qubit_path[i] == two_qubit_path[i+1].
+    All other slots are [].
+    """
+    n = len(two_qubit_path)
+    schedule = []
     inserted = False
 
-    for entry in two_qubit_path:
-        if not inserted:
-            if entry == prev:
-                run_length += 1
-            else:
-                prev = entry
-                run_length = 1
-            
-            #TODO: rethink when introducing 3D
-            if run_length >= 2:
-                two_qubit_gate_schedule.append(circuit_column)
-                inserted = True
-                continue
+    for i in range(n):
+        if not inserted and i < n-1 and two_qubit_path[i] == two_qubit_path[i+1]:
+            schedule.append(circuit_column)
+            inserted = True
+        else:
+            schedule.append([])
 
-        two_qubit_gate_schedule.append([])
+    return schedule
 
-    return two_qubit_gate_schedule
 
 
 # ---------------------------------------------------------------------
@@ -193,9 +281,9 @@ def debug():
 
     fid = qml.math.fidelity(circuit(), test_qft_circuit())
     print("FIDELITY:", fid)
-    qml.drawer.use_style("black_white")
-    fig, ax = qml.draw_mpl(circuit)()
-    plt.show()
+    #qml.drawer.use_style("black_white")
+    #fig, ax = qml.draw_mpl(circuit)()
+    #plt.show()
 
 
 # ---------------------------------------------------------------------
@@ -204,8 +292,9 @@ def debug():
 
 def main():
     # call and interface everything
-    initial_ion_pos = [(0, 0), (0, 1), (1, 0), (1, 2), (2, 0), (2, 1), (3, 0), (3, 1)]  # Initial positions at t=0
-    #debug()
+    initial_ion_pos = [(0, 1), (0, 3), (0, 5), (1, 6), (3, 6), (4, 1), (4, 3), (4, 5)]  # Initial positions at t=0
+    interaction_points = [(1, 1), (1, 3), (3, 1), (3, 3), (1, 5), (3, 5)]
+    # debug()
     batched_circuit = batch_circuit()
 
     gates_schedule    = []
@@ -222,11 +311,16 @@ def main():
             positions_history.append(current_ion_pos)
         elif is_two_qubit_op(circuit_column):
             cnt_two_op += 1
-            two_qubit_path = get_two_qubit_path(circuit_column, current_ion_pos)
+            two_qubit_path = get_two_qubit_path(
+                current_ion_pos, interaction_points, circuit_column[0][2][0], circuit_column[0][2][1])
             two_qubit_gate_schedule = get_two_qubit_gate_schedule(two_qubit_path, circuit_column)
             gates_schedule = gates_schedule + two_qubit_gate_schedule
             current_ion_pos = two_qubit_path[-1]
             positions_history = positions_history + two_qubit_path
+
+    # interface to verifier and fidelity
+    verifier.verifier(positions_history, gates_schedule, trap_graph)
+    fidelity.fidelity(positions_history, gates_schedule, trap_graph)
 
     return None
 
