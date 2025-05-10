@@ -5,6 +5,7 @@ import networkx as nx
 from .. import trap
 from .. import fidelity
 from .. import verifier
+import max_new
 from functools import lru_cache
 
 trap_graph = trap.create_trap_graph()
@@ -158,6 +159,16 @@ def is_two_qubit_op(circuit_column) -> bool:
         return True
     return False
 
+def adjusted(pos, idx):
+    x, y = pos
+    if 0 <= idx < 3:
+        return (x + 1, y)
+    elif 3 <= idx < 5:
+        return (x, y - 1)
+    elif 5 <= idx < 8:
+        return (x - 1, y)
+    raise ValueError(f"Qubit index {idx} out of supported range")
+
 def select_int_point(current_positions, interaction_positions, qu1, qu2):
     """
     Selects the interaction point index between two qubits qu1 and qu2.
@@ -171,15 +182,6 @@ def select_int_point(current_positions, interaction_positions, qu1, qu2):
     Returns:
         int: Index of the interaction point in interaction_positions.
     """
-    def adjusted(pos, idx):
-        x, y = pos
-        if 0 <= idx < 3:
-            return (x + 1, y)
-        elif 3 <= idx < 5:
-            return (x, y - 1)
-        elif 5 <= idx < 8:
-            return (x - 1, y)
-        raise ValueError(f"Qubit index {idx} out of supported range")
 
     try:
         qu1_pos = adjusted(current_positions[qu1], qu1)
@@ -207,9 +209,9 @@ def get_qubits_paths(current_positions, interaction_positions, qu1, qu2):
             path2 is the path from qu2 to the interaction point.
     """
     int_idx, int_pos  = select_int_point(current_positions, interaction_positions, qu1, qu2)
-    path1 = shortest_path(current_positions[qu1], interaction_positions[int_idx])
-    path2 = shortest_path(current_positions[qu2], interaction_positions[int_idx])
-    return path1, path2
+    path1 = shortest_path(adjusted(current_positions[qu1], qu1), interaction_positions[int_idx] )
+    path2 = shortest_path(adjusted(current_positions[qu2], qu2), interaction_positions[int_idx])
+    return [current_positions[qu1]] + path1, [current_positions[qu2]] + path2
 
 def get_two_qubit_path(current_ion_pos, interaction_points, qu1, qu2):
     """
@@ -241,8 +243,10 @@ def get_two_qubit_path(current_ion_pos, interaction_points, qu1, qu2):
         stepwise_positions.append(step)
 
     forward = [pos.copy() for pos in stepwise_positions]
+
+    stepwise_positions = forward + list(reversed(forward))
     
-    stepwise_positions.extend(pos.copy() for pos in reversed(forward))
+    #stepwise_positions.extend(pos.copy() for pos in reversed(forward))
 
     return stepwise_positions
 
