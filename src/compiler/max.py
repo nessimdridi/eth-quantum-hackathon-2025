@@ -2,17 +2,20 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import matplotlib.animation as animation
 from matplotlib.lines import Line2D
+from matplotlib.patches import Circle
 
 positions_history = [
     [(0, 0), (0, 1), (1, 0), (1, 2), (2, 0), (2, 1), (3, 0), (3, 1)],  # Initial positions at t=0
     [(0, 0), (0, 1), (1, 1), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],  # Qubit 2/3 moved to (1, 1)
     [(0, 0), (0, 1), (1, 1), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],  # No movement at t=2
+    [(0, 0), (0, 1), (1, 1), (1, 1), (2, 0, "idle"), (2, 1), (3, 0), (3, 1)],  # No movement at t=2
 ]
 
 gates_schedule = [
     [("RX", 1.57, 0), ("RY", 3.14, 1)],  # Gates applied at t=0
     [("MS", 0.78, (2, 3))],              # MS gate applied at t=1
-    [],                                  # (No gates applied at t=2) There is no need to repeat MS for its duration in the gates schedule.
+    [],
+    []# (No gates applied at t=2) There is no need to repeat MS for its duration in the gates schedule.
 ]
 
 
@@ -70,8 +73,11 @@ def get_trap_positions(trap):
     return pos
 
 def visualize_movement_on_trap(trap, positions_history, gates_schedule):
+    
+    
     pos = get_trap_positions(trap)
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_aspect('equal')
     fig.subplots_adjust(right=0.75)  # Space for legend and text
 
     # Draw the trap graph
@@ -85,7 +91,9 @@ def visualize_movement_on_trap(trap, positions_history, gates_schedule):
 
     # Plot qubit positions
     scat = ax.scatter([], [], c='blue', s=250, edgecolors='black', zorder=3)
-    beam_line, = ax.plot([], [], color='red', linewidth=2, alpha=0.6, zorder=4)
+    beam_circle = Circle((0, 0), radius=0.2, edgecolor='blue', facecolor='blue', linewidth=2, alpha=0.4, zorder=4)
+    ax.add_patch(beam_circle)
+    beam_circle.set_visible(False)
 
     # Circle-based legend
     legend_elements = [
@@ -117,8 +125,13 @@ def visualize_movement_on_trap(trap, positions_history, gates_schedule):
 
     def update(frame):
         positions = positions_history[frame]
-        xy = [(p[0], p[1]) for p in positions]
-        scat.set_offsets(xy)
+        resolved_positions = []
+        for p in positions:
+            if isinstance(p, tuple) and len(p) == 3 and p[2] == "idle":
+                resolved_positions.append(pos.get(p, (p[0], p[1] + 0.3)))  # default offset if not found
+            else:
+                resolved_positions.append(p)
+        scat.set_offsets(resolved_positions)
 
         ax.set_title(f"Qubit Positions at Timestep {frame}", fontsize=14)
 
@@ -128,22 +141,23 @@ def visualize_movement_on_trap(trap, positions_history, gates_schedule):
         gate_text.set_text(f"Gates at t={frame}:\n{gate_info}")
 
         # Draw beam for 2-qubit gates
-        beam_drawn = False
+        beam_circle.set_visible(False)
         for gate in gates:
             if isinstance(gate[2], tuple) and len(gate[2]) == 2:
                 q1, q2 = gate[2]
-                x1, y1 = positions[q1][0], positions[q1][1]
-                x2, y2 = positions[q2][0], positions[q2][1]
-                beam_line.set_data([x1, x2], [y1, y2])
-                beam_drawn = True
+                try:
+                    x1, y1 = resolved_positions[q1]
+                    beam_circle.center = (x1, y1)
+                    beam_circle.set_visible(True)
+                except IndexError:
+                    print(f"Invalid qubit indices: {q1}, {q2}")
                 break
-        if not beam_drawn:
-            beam_line.set_data([], [])
-
-        return scat, gate_text, beam_line
+        return scat, gate_text
 
     ani = animation.FuncAnimation(fig, update, frames=len(positions_history), interval=2000, blit=False)
-    plt.show()
+    # plt.show()
+    ani.save("qubit_movement.gif", writer='ffmpeg', fps=1)
+    # ani.save("qubit_movement.gif", writer='pillow', fps=1)
     
     
 # Run visualization
