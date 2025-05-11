@@ -187,7 +187,7 @@ def visualize_movement_on_trap(trap, positions_history, gates_schedule):
 
     ani = animation.FuncAnimation(fig, update, frames=len(positions_history), interval=2000, blit=False)
     # plt.show()
-    ani.save("qubit_movement_idle.gif", writer='ffmpeg', fps=1)
+    ani.save("qubit_movement_compiler_v01.gif", writer='ffmpeg', fps=1)
     # ani.save("qubit_movement.gif", writer='pillow', fps=1)
     
     

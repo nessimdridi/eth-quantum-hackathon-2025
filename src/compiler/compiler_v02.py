@@ -271,11 +271,56 @@ def main():
             current_ion_pos = two_qubit_path[-1]
             positions_history = positions_history + two_qubit_path
 
+    # ---------------------------------------------------------------------
+    # Post-process: Idle long-stationary ions (≥ 6 steps) but undo on gates/moves
+    # ---------------------------------------------------------------------
+    import copy
+
+    threshold = 6
+    num_steps = len(positions_history)
+    num_ions  = len(positions_history[0])
+
+    # Make a deep copy so we can patch in idle-nodes without losing original
+    new_positions = copy.deepcopy(positions_history)
+
+    for ion_idx in range(num_ions):
+        run_length = 0
+        prev_pos   = positions_history[0][ion_idx]
+
+        for t in range(1, num_steps):
+            curr_pos = positions_history[t][ion_idx]
+
+            # 1) Did we have a gate on this ion at step t?
+            has_gate = any(
+                (g[0] in ("RX", "RY") and g[2] == ion_idx)
+                or (g[0] == "MS" and ion_idx in g[2])
+                for g in gates_schedule[t]
+            )
+
+            # 2) Movement or gate?  Reset run_length and restore original pos
+            if curr_pos != prev_pos or has_gate:
+                run_length = 0
+                prev_pos   = curr_pos
+                new_positions[t][ion_idx] = curr_pos
+            else:
+                # 3) Stationary with no gate → increment run
+                run_length += 1
+                # 4) Only idle _after_ threshold steps of pure sitting/waiting
+                if run_length >= threshold:
+                    r, c       = curr_pos
+                    idle_node  = (r, c, "idle")
+                    #print(f">> Idling ion {ion_idx} at t={t}, stayed at {curr_pos} for {run_length} steps")
+                    new_positions[t][ion_idx] = idle_node
+
+    # Overwrite the old history with our patched version
+    positions_history = new_positions
+
+
     # interface to verifier and fidelity
     if not use_Z: verifier.verifier(positions_history, gates_schedule, trap_graph)
     fidelity.fidelity(positions_history, gates_schedule, trap_graph)
 
-    # visualization.visualize_movement_on_trap(trap_graph, positions_history, gates_schedule)
+    visualization.visualize_movement_on_trap(trap_graph, positions_history, gates_schedule)
 
     return None
 
