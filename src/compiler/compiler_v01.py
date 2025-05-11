@@ -309,13 +309,12 @@ def main():
                 if run_length >= threshold:
                     r, c       = curr_pos
                     idle_node  = (r, c, "idle")
-                    print(f">> Idling ion {ion_idx} at t={t}, stayed at {curr_pos} for {run_length} steps")
+                    #print(f">> Idling ion {ion_idx} at t={t}, stayed at {curr_pos} for {run_length} steps")
                     new_positions[t][ion_idx] = idle_node
 
     # Overwrite the old history with our patched version
     positions_history = new_positions
 
-    # Now you can safely call verifier() and fidelity() on the updated timeline.
 
     # interface to verifier and fidelity
     if not use_Z: verifier.verifier(positions_history, gates_schedule, trap_graph)
