@@ -13,6 +13,7 @@ from src import fidelity
 from src import verifier
 from functools import lru_cache
 from src.modules import visualization 
+from src.modules import qft
 
 trap_graph = trap.create_trap_graph()
 
@@ -20,75 +21,13 @@ num_ions = 8
 
 device = qml.device("default.mixed", wires=num_ions)
 
-# ---------------------------------------------------------------------
-#                                 CIRCUIT
-# ---------------------------------------------------------------------
-
-def make_Hadamard(wire):
-    # these calls go directly into whatever QNode is active
-    qml.RY(np.pi/2, wires=wire)
-    qml.RX(np.pi,   wires=wire)
-
-def make_Z_rotation(theta, wire):
-    qml.RY(np.pi/2, wires = wire)
-    qml.RX(theta, wires = wire)
-    qml.RY(-np.pi/2, wires = wire)
-
-def controlled_not_gate(control, target):
-    qml.RY(np.pi/2, wires=control)
-    qml.IsingXX(np.pi/2, wires=[control, target])
-    qml.RX(-np.pi/2, wires=control)
-    qml.RX(-np.pi/2, wires=target)
-    qml.RY(-np.pi/2, wires=control)
-
-def controlled_phase_gate(k, control, target):
-    controlled_not_gate(control, target)
-    make_Z_rotation(-0.5*2*np.pi/(2**k), wire=target)
-    controlled_not_gate(control, target)
-    make_Z_rotation(0.5*2*np.pi/(2**k), wire=control)
-    make_Z_rotation(0.5*2*np.pi/(2**k), wire=target)
-
-@qml.qnode(device=device)
-def circuit():
-    # QFT sequence of single qubit rotations (RX and RY) and MS gates
-    for i in range(num_ions):
-        make_Hadamard(wire=i)
-        t = i+1
-        for k in range(2, num_ions-i+1):
-            controlled_phase_gate(k, control=t, target=i)
-            t += 1
-    return qml.density_matrix(wires=range(num_ions))
-
-def extract_gate_sequence(qnode):
-    """
-    Given a Pennylane QNode, returns a flat list of tuples
-    (gate_name, parameter, wire) in the order they were applied.
-    """
-    qnode()
-    tape = qnode.tape
-    
-    seq = []
-    for op in tape.operations:
-        if op.name in ("RX", "RY", "IsingXX"):
-            name = "MS" if op.name == "IsingXX" else op.name
-
-            # assume single-parameter gates
-            angle = float(op.parameters[0])
-            
-            # handle wires for 1 or 2 qubit gates
-            wires = list(op.wires)
-            wire = wires[0] if len(wires) == 1 else tuple(wires)
-            
-            seq.append((name, angle, wire))
-    return seq
-
 
 # ---------------------------------------------------------------------
 #                                 BATCHING
 # ---------------------------------------------------------------------
 
 
-def batch_circuit():
+def batch_circuit(use_Z, use_cont_MS):
     """
     Maps the sequences of the QFT to batched, preselected gates
 
@@ -99,7 +38,7 @@ def batch_circuit():
     batched_circuit      = []
     batched_circuit_t    = []
 
-    gate_seq = extract_gate_sequence(circuit)
+    gate_seq = qft.extract_gate_sequence(qft.circuit, use_Z, use_cont_MS)
     
     # construction of the gate sequence and position history
     used_qubits = set()
@@ -283,7 +222,7 @@ def get_two_qubit_gate_schedule(two_qubit_path, circuit_column):
 # ---------------------------------------------------------------------
 
 
-def debug():
+def debug(use_Z, use_cont_MS):
     test_device = qml.device("default.mixed", wires=num_ions)
 
     @qml.qnode(device=test_device)
@@ -291,11 +230,11 @@ def debug():
         qml.QFT(wires=range(num_ions))
         return qml.density_matrix(wires=range(num_ions))
 
-    fid = qml.math.fidelity(circuit(), test_qft_circuit())
+    fid = qml.math.fidelity(qft.circuit(use_Z, use_cont_MS), test_qft_circuit())
     print("FIDELITY:", fid)
-    #qml.drawer.use_style("black_white")
-    #fig, ax = qml.draw_mpl(circuit)()
-    #plt.show()
+    qml.drawer.use_style("black_white")
+    fig, ax = qml.draw_mpl(qft.circuit)(use_Z, use_cont_MS)
+    plt.show()
 
 
 # ---------------------------------------------------------------------
@@ -306,8 +245,10 @@ def main():
     # call and interface everything
     initial_ion_pos = [(0, 1), (0, 3), (0, 5), (1, 6), (3, 6), (4, 1), (4, 3), (4, 5)]  # Initial positions at t=0
     interaction_points = [(1, 1), (1, 3), (3, 1), (3, 3), (1, 5), (3, 5)]
-    # debug()
-    batched_circuit = batch_circuit()
+    use_Z = False # does not work with provided fidelity and verifier python scripts if set to True!
+    use_cont_MS = False
+    #debug(use_Z, use_cont_MS)
+    batched_circuit = batch_circuit(use_Z, use_cont_MS)
 
     gates_schedule    = []
     positions_history = []
@@ -330,8 +271,54 @@ def main():
             current_ion_pos = two_qubit_path[-1]
             positions_history = positions_history + two_qubit_path
 
+    # ---------------------------------------------------------------------
+    # Post-process: Idle long-stationary ions (≥ 6 steps) but undo on gates/moves
+    # ---------------------------------------------------------------------
+    import copy
+
+    threshold = 6
+    num_steps = len(positions_history)
+    num_ions  = len(positions_history[0])
+
+    # Make a deep copy so we can patch in idle-nodes without losing original
+    new_positions = copy.deepcopy(positions_history)
+
+    for ion_idx in range(num_ions):
+        run_length = 0
+        prev_pos   = positions_history[0][ion_idx]
+
+        for t in range(1, num_steps):
+            curr_pos = positions_history[t][ion_idx]
+
+            # 1) Did we have a gate on this ion at step t?
+            has_gate = any(
+                (g[0] in ("RX", "RY") and g[2] == ion_idx)
+                or (g[0] == "MS" and ion_idx in g[2])
+                for g in gates_schedule[t]
+            )
+
+            # 2) Movement or gate?  Reset run_length and restore original pos
+            if curr_pos != prev_pos or has_gate:
+                run_length = 0
+                prev_pos   = curr_pos
+                new_positions[t][ion_idx] = curr_pos
+            else:
+                # 3) Stationary with no gate → increment run
+                run_length += 1
+                # 4) Only idle _after_ threshold steps of pure sitting/waiting
+                if run_length >= threshold:
+                    r, c       = curr_pos
+                    idle_node  = (r, c, "idle")
+                    print(f">> Idling ion {ion_idx} at t={t}, stayed at {curr_pos} for {run_length} steps")
+                    new_positions[t][ion_idx] = idle_node
+
+    # Overwrite the old history with our patched version
+    positions_history = new_positions
+
+    # Now you can safely call verifier() and fidelity() on the updated timeline.
+
     # interface to verifier and fidelity
-    verifier.verifier(positions_history, gates_schedule, trap_graph)
+    if not use_Z: verifier.verifier(positions_history, gates_schedule, trap_graph)
     fidelity.fidelity(positions_history, gates_schedule, trap_graph)
 
     visualization.visualize_movement_on_trap(trap_graph, positions_history, gates_schedule)
